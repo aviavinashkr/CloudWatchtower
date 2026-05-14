@@ -1,7 +1,7 @@
 """
 sentinel.py — The Core Brain of Gemini Cloud Sentinel
 
-Analyzes Terraform diffs and CI/CD failure logs using Gemini 1.5 Flash.
+Analyzes Terraform diffs and CI/CD failure logs using Gemini 2.0 Flash-Lite.
 Provides actionable security, cost, and remediation insights.
 """
 
@@ -30,106 +30,58 @@ logger = logging.getLogger(__name__)
 # ─── Prompts ───────────────────────────────────────────────────────────────
 
 REVIEW_PROMPT_TEMPLATE = """
-You are a **Senior DevOps Architect and Cloud Security Expert** specialising in
-Terraform, Azure, and Infrastructure-as-Code best practices.
-
-You have been given a Terraform git diff from a Pull Request. Your job is to
-produce a structured governance report.
-
----
+You are a Senior DevOps Architect reviewing a Terraform Pull Request.
+Analyze the diff below and produce a concise governance report in Markdown.
 
 ## TERRAFORM DIFF
 ```hcl
 {diff}
 ```
 
----
+## TASKS
 
-## YOUR TASKS
-
-### 1. 🔐 Security Analysis
-Identify every security risk in the diff. For each risk, provide:
-- **Severity**: CRITICAL | HIGH | MEDIUM | LOW
-- **Resource**: the Terraform resource name
-- **Issue**: clear description of the problem
-- **Fix**: the corrected HCL snippet
-
-Look specifically for:
-- Open Network Security Group rules (0.0.0.0/0 ingress)
-- Publicly exposed storage accounts or blobs
-- Missing encryption (at-rest and in-transit)
-- Hard-coded credentials or secrets
-- Overly permissive IAM/RBAC roles
-- Missing diagnostic settings / audit logging
-- Disabled TLS or weak TLS versions
+### 1. 🔐 Security Risks
+For each issue: **Severity** (CRITICAL/HIGH/MEDIUM/LOW) | **Resource** | **Issue** | corrected HCL snippet.
+Check for: open NSG rules (0.0.0.0/0), public storage, missing encryption, hard-coded secrets, weak TLS.
 
 ### 2. 💰 Cost Optimisation
-Identify cost-saving opportunities. For each:
-- **Resource**: Terraform resource name
-- **Issue**: what is over-provisioned or wasteful
-- **Recommendation**: the right-sized or cheaper alternative
-- **Estimated saving**: rough monthly saving (if estimable)
+For each: **Resource** | **Issue** | **Recommendation** | estimated saving.
+Check for: oversized VM SKUs, missing auto-shutdown on dev VMs, unnecessary public IPs.
 
-Look specifically for:
-- Oversized VM SKUs (e.g., Standard_D16s_v3 when Standard_B2s suffices)
-- Non-reserved compute instances for stable workloads
-- LRS vs GRS storage where durability needs are low
-- Public IP addresses left attached to stopped resources
-- Missing auto-shutdown schedules for dev/test VMs
+### 3. 🔄 Deprecation Warnings
+Flag deprecated attributes or old provider versions with the modern alternative.
 
-### 3. 🔄 Deprecation & Compatibility Warnings
-- Flag any deprecated Terraform attributes or old provider versions
-- Suggest the modern equivalent syntax
-
-### 4. ✅ Summary & Verdict
-Provide an overall assessment:
-- **APPROVED** — safe to merge with no or only low-severity findings
-- **APPROVED WITH WARNINGS** — merge allowed but address medium-severity items
-- **CHANGES REQUESTED** — high/critical findings must be fixed before merge
-
-Format your entire response as clean Markdown so it renders well as a GitHub PR comment.
+### 4. ✅ Verdict
+**APPROVED** | **APPROVED WITH WARNINGS** | **CHANGES REQUESTED**
 """
 
 FAILURE_PROMPT_TEMPLATE = """
-You are a **Senior DevOps Architect and Cloud Security Expert** specialising in
-Terraform, Azure, and CI/CD pipelines.
+You are a Senior DevOps Architect diagnosing a GitHub Actions pipeline failure.
 
-A GitHub Actions pipeline has failed. Your job is to diagnose the root cause
-and generate a corrected fix.
-
----
-
-## PIPELINE FAILURE LOGS
+## FAILURE LOGS
 ```
 {logs}
 ```
 
 {diff_section}
 
----
+## TASKS
 
-## YOUR TASKS
+### 1. 🔍 Root Cause
+Explain in plain English why this failed, referencing exact error messages.
 
-### 1. 🔍 Root Cause Analysis
-Explain in plain English exactly why this deployment failed.
-Be specific — reference exact error messages from the logs.
+### 2. 🛠️ Fix Steps
+Numbered steps to resolve the issue.
 
-### 2. 🛠️ Step-by-Step Fix
-Provide numbered steps the engineer must take to resolve this.
+### 3. 📝 Corrected HCL
+If Terraform code caused the failure, provide the corrected snippet in a
+```hcl\n# filename.tf\n``` code block.
 
-### 3. 📝 Corrected HCL Code
-If the failure is caused by incorrect Terraform code, provide the full
-corrected HCL snippet. Wrap it in a fenced code block tagged `hcl`.
-Also provide the corrected file name as a comment at the top of the block.
+### 4. 🔑 Missing Secrets / Permissions
+List any missing GitHub Secrets or Azure RBAC permissions.
 
-### 4. 🔄 Required GitHub Secrets / Azure Permissions
-List any missing environment variables, GitHub Secrets, or Azure RBAC
-permissions that need to be added.
-
-### 5. ✅ Verification Steps
-How can the engineer verify the fix worked after re-running the pipeline?
-
-Format your entire response as clean Markdown so it renders well as a GitHub PR comment.
+### 5. ✅ Verification
+How to confirm the fix worked.
 """
 
 DIFF_SECTION_TEMPLATE = """
@@ -143,7 +95,7 @@ DIFF_SECTION_TEMPLATE = """
 # ─── Gemini Client ─────────────────────────────────────────────────────────
 
 def _get_model():
-    """Configure and return a Gemini 1.5 Flash client."""
+    """Configure and return a Gemini 2.0 Flash-Lite client."""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise EnvironmentError(
@@ -158,7 +110,7 @@ def _get_model():
 
 def analyze_terraform_diff(diff: str, mcp_context: Optional[str] = None) -> str:
     """
-    Analyze a Terraform git diff using Gemini 1.5 Flash.
+    Analyze a Terraform git diff using Gemini 2.0 Flash-Lite.
 
     Args:
         diff: The raw git diff output containing HCL changes.
@@ -179,7 +131,7 @@ def analyze_terraform_diff(diff: str, mcp_context: Optional[str] = None) -> str:
 
     client = _get_model()
     response = client.models.generate_content(
-        model="gemini-1.5-flash",
+        model="gemini-2.0-flash-lite",
         contents=prompt,
         config=genai_types.GenerateContentConfig(
             temperature=0.2,
@@ -224,7 +176,7 @@ def analyze_failure_logs(
 
     client = _get_model()
     response = client.models.generate_content(
-        model="gemini-1.5-flash",
+        model="gemini-2.0-flash-lite",
         contents=prompt,
         config=genai_types.GenerateContentConfig(
             temperature=0.2,
