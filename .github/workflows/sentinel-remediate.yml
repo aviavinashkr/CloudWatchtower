@@ -37,7 +37,7 @@ jobs:
       - name: Extract context from failed run
         id: context
         env:
-          GITHUB_TOKEN: ${{ secrets.SENTINEL_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           FAILED_RUN_ID="${{ github.event.workflow_run.id }}"
           FAILED_WORKFLOW="${{ github.event.workflow_run.name }}"
@@ -83,7 +83,7 @@ jobs:
       - name: Notify on failure
         if: failure()
         env:
-          GITHUB_TOKEN: ${{ secrets.SENTINEL_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "⚠️ Sentinel auto-remediation encountered an error."
           echo "Check the artifact log for details."
