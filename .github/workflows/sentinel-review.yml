@@ -1,0 +1,158 @@
+name: "🛡️ Sentinel — Terraform PR Review"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "**/*.tf"
+      - "**/*.tfvars"
+
+# Only one concurrent review per PR
+concurrency:
+  group: sentinel-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  sentinel-review:
+    name: "AI Governance Review"
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write   # Post PR comments
+      contents: read         # Read repo contents
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # Full history needed for accurate diffs
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Sentinel dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate Terraform diff
+        id: diff
+        run: |
+          # Get the diff of only .tf and .tfvars files in this PR
+          git diff origin/${{ github.base_ref }}...HEAD \
+            -- '*.tf' '*.tfvars' \
+            > /tmp/terraform.diff
+          
+          DIFF_SIZE=$(wc -c < /tmp/terraform.diff)
+          echo "diff_size=${DIFF_SIZE}" >> "$GITHUB_OUTPUT"
+          echo "Diff size: ${DIFF_SIZE} bytes"
+
+      - name: Skip if no Terraform changes
+        if: steps.diff.outputs.diff_size == '0'
+        run: |
+          echo "No Terraform changes detected. Skipping sentinel review."
+          exit 0
+
+      - name: Fetch MCP context (optional)
+        id: mcp
+        continue-on-error: true   # MCP server is optional — don't fail the pipeline
+        env:
+          MCP_SERVER_URL: ${{ secrets.MCP_SERVER_URL }}
+        run: |
+          if [ -n "${MCP_SERVER_URL}" ]; then
+            # Extract resource types from the diff
+            RESOURCE_TYPES=$(grep -oP 'resource\s+"(azurerm_[^"]+)"' /tmp/terraform.diff \
+              | grep -oP '"azurerm_[^"]+"' \
+              | tr -d '"' \
+              | sort -u \
+              | tr '\n' ',' \
+              | sed 's/,$//')
+            
+            if [ -n "${RESOURCE_TYPES}" ]; then
+              echo "Fetching docs for: ${RESOURCE_TYPES}"
+              curl -sf \
+                "${MCP_SERVER_URL}/tools/get_context_bundle?resource_types=${RESOURCE_TYPES}&wiki_topics=nsg_policy,tagging_policy,vm_sizing,tf_provider_guidance" \
+                -o /tmp/mcp_context.json || true
+              
+              if [ -f /tmp/mcp_context.json ]; then
+                python3 -c "
+          import json
+          with open('/tmp/mcp_context.json') as f:
+              data = json.load(f)
+          with open('/tmp/mcp_context.txt', 'w') as f:
+              f.write(data.get('context', ''))
+          "
+                echo "mcp_context_available=true" >> "$GITHUB_OUTPUT"
+              fi
+            fi
+          else
+            echo "MCP_SERVER_URL not configured — skipping context enrichment."
+          fi
+
+      - name: Run Sentinel analysis
+        id: analysis
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          MCP_ARGS=""
+          if [ "${{ steps.mcp.outputs.mcp_context_available }}" = "true" ]; then
+            MCP_ARGS="--mcp-context-file /tmp/mcp_context.txt"
+          fi
+          
+          python -m sentinel.sentinel \
+            --mode review \
+            --diff-file /tmp/terraform.diff \
+            --output markdown \
+            --output-file /tmp/sentinel_report.md \
+            ${MCP_ARGS}
+          
+          echo "Analysis complete. Report size: $(wc -c < /tmp/sentinel_report.md) bytes"
+
+      - name: Post analysis as PR comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPORT=$(cat /tmp/sentinel_report.md)
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          
+          # Post the comment via GitHub REST API
+          python3 -c "
+          import os, json, requests
+          
+          token = os.environ['GITHUB_TOKEN']
+          repo = '${REPO}'
+          pr_number = ${PR_NUMBER}
+          
+          with open('/tmp/sentinel_report.md') as f:
+              analysis = f.read()
+          
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+          }
+          
+          body = (
+              '## 🛡️ Gemini Cloud Sentinel Report\n\n'
+              '> *Automated Terraform governance analysis powered by **Gemini 1.5 Flash***\n\n'
+              '---\n\n'
+              + analysis
+          )
+          
+          resp = requests.post(
+              f'https://api.github.com/repos/{repo}/issues/{pr_number}/comments',
+              headers=headers,
+              json={'body': body},
+          )
+          resp.raise_for_status()
+          print(f'Comment posted: {resp.json()[\"html_url\"]}')
+          "
+
+      - name: Upload analysis artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sentinel-review-pr-${{ github.event.pull_request.number }}
+          path: /tmp/sentinel_report.md
+          retention-days: 30

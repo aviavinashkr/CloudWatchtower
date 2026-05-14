@@ -1,0 +1,90 @@
+name: "🛠️ Sentinel — Auto-Remediation"
+
+on:
+  workflow_run:
+    # Monitor ALL workflows in this repo for failures
+    workflows: ["*"]
+    types: [completed]
+
+jobs:
+  sentinel-remediate:
+    name: "AI Auto-Remediation"
+    # Only trigger when the monitored workflow failed
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # Create fix branches
+      pull-requests: write     # Open remediation PRs
+      actions: read            # Read workflow logs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use a PAT so that the new branch/PR triggers further workflows
+          token: ${{ secrets.SENTINEL_PAT }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Sentinel dependencies
+        run: pip install -r requirements.txt
+
+      - name: Extract context from failed run
+        id: context
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FAILED_RUN_ID="${{ github.event.workflow_run.id }}"
+          FAILED_WORKFLOW="${{ github.event.workflow_run.name }}"
+          FAILED_SHA="${{ github.event.workflow_run.head_sha }}"
+          FAILED_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          
+          echo "failed_run_id=${FAILED_RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "failed_workflow=${FAILED_WORKFLOW}" >> "$GITHUB_OUTPUT"
+          echo "failed_sha=${FAILED_SHA}" >> "$GITHUB_OUTPUT"
+          echo "failed_branch=${FAILED_BRANCH}" >> "$GITHUB_OUTPUT"
+          
+          echo "Failed workflow: ${FAILED_WORKFLOW} (run ${FAILED_RUN_ID})"
+          echo "Failed on branch: ${FAILED_BRANCH} @ ${FAILED_SHA}"
+          
+          # Try to generate a diff from the failed commit
+          git diff HEAD~1 HEAD -- '*.tf' '*.tfvars' > /tmp/terraform.diff 2>/dev/null || true
+          echo "Terraform diff size: $(wc -c < /tmp/terraform.diff) bytes"
+
+      - name: Run Sentinel auto-remediation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.SENTINEL_PAT }}
+        run: |
+          DIFF_ARGS=""
+          if [ -s /tmp/terraform.diff ]; then
+            DIFF_ARGS="--diff-file /tmp/terraform.diff"
+          fi
+          
+          python -m sentinel.auto_remediate \
+            --repo "${{ github.repository }}" \
+            --run-id "${{ steps.context.outputs.failed_run_id }}" \
+            ${DIFF_ARGS} \
+            2>&1 | tee /tmp/remediation_output.log
+
+      - name: Upload remediation log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sentinel-remediation-run-${{ github.event.workflow_run.id }}
+          path: /tmp/remediation_output.log
+          retention-days: 30
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "⚠️ Sentinel auto-remediation encountered an error."
+          echo "Check the artifact log for details."
+          # Optionally: send Slack/Teams notification here
