@@ -110,7 +110,7 @@ jobs:
 
       - name: Post analysis as PR comment
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.SENTINEL_PAT }}
         run: |
           REPORT=$(cat /tmp/sentinel_report.md)
           PR_NUMBER="${{ github.event.pull_request.number }}"
