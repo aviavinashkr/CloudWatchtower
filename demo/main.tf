@@ -153,7 +153,7 @@ resource "azurerm_storage_account" "demo" {
 
   # 🚨 HIGH: Minimum TLS version not enforced
   # min_tls_version = "TLS1_2"  # ← This line is MISSING
-  # test test 
+  # test 2345
   # ⚠️  SENTINEL SHOULD FLAG: No network rules / private endpoint
   # ⚠️  SENTINEL SHOULD FLAG: Missing tags
 }
