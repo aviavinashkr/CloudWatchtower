@@ -1,7 +1,7 @@
 """
 sentinel.py — The Core Brain of Gemini Cloud Sentinel
 
-Analyzes Terraform diffs and CI/CD failure logs using Gemini 2.0 Flash.
+Analyzes Terraform diffs and CI/CD failure logs using Gemini 2.0 Flash-Lite.
 Provides actionable security, cost, and remediation insights.
 """
 
@@ -143,7 +143,7 @@ DIFF_SECTION_TEMPLATE = """
 # ─── Gemini Client ─────────────────────────────────────────────────────────
 
 def _get_model():
-    """Configure and return a Gemini 2.0 Flash client."""
+    """Configure and return a Gemini 2.0 Flash-Lite client."""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise EnvironmentError(
@@ -158,7 +158,7 @@ def _get_model():
 
 def analyze_terraform_diff(diff: str, mcp_context: Optional[str] = None) -> str:
     """
-    Analyze a Terraform git diff using Gemini 2.0 Flash.
+    Analyze a Terraform git diff using Gemini 2.0 Flash-Lite.
 
     Args:
         diff: The raw git diff output containing HCL changes.
@@ -179,7 +179,7 @@ def analyze_terraform_diff(diff: str, mcp_context: Optional[str] = None) -> str:
 
     client = _get_model()
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.0-flash-lite",
         contents=prompt,
         config=genai_types.GenerateContentConfig(
             temperature=0.2,
@@ -224,7 +224,7 @@ def analyze_failure_logs(
 
     client = _get_model()
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.0-flash-lite",
         contents=prompt,
         config=genai_types.GenerateContentConfig(
             temperature=0.2,
